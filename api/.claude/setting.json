@@ -1,0 +1,37 @@
+{
+    "hooks": {
+        "PreTooUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/pre-check.sh"
+                    }
+                ]
+            }
+        ],
+        "PostTooUse": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/post-check.sh"
+                    }
+                ]
+            }
+        ],
+        "Stop": [
+            {
+                "matcher": "Bash",
+                "hooks": [
+                    {
+                        "type": "command",
+                        "command": ".claude/hooks/stop-check.sh"
+                    }
+                ]
+            }
+        ]
+    }
+}

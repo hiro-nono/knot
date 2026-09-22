@@ -1,0 +1,5 @@
+# Claude Codeのローカル専用設定(個人環境依存のため共有しない)
+**/.claude/settings.local.json
+
+# 退避した旧.git(app/.git.bak-create-next-app)
+app/.git.bak-create-next-app/

@@ -1,0 +1,26 @@
+# Secrets — never commit environment files (this app is BYO-AI; any
+# key that ends up in one of these must not reach a public OSS repo).
+.env
+.env.*
+!.env.example
+
+# Build output
+bin/
+/dist/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+
+# Go tooling
+*.out
+go.work
+go.work.sum
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

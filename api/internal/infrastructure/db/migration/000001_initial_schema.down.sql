@@ -1,0 +1,27 @@
+DROP TABLE response_items;
+DROP TABLE responses;
+DROP TABLE preferences;
+DROP TABLE recipients;
+DROP TABLE options;
+DROP TABLE sources;
+DROP TABLE informations;
+DROP TABLE account_status_events;
+DROP TABLE membership_removal_requests;
+DROP TABLE membership_events;
+DROP TABLE memberships;
+DROP TABLE users;
+DROP TABLE accounts;
+
+DROP TYPE information_response_policy;
+DROP TYPE information_access_type;
+DROP TYPE source_interaction_type;
+DROP TYPE source_status;
+DROP TYPE source_type;
+DROP TYPE membership_removal_request_status;
+DROP TYPE membership_event_type;
+DROP TYPE membership_status;
+DROP TYPE membership_role;
+DROP TYPE account_status_event_type;
+DROP TYPE account_status;
+DROP TYPE account_role;
+DROP TYPE account_type;
