@@ -52,22 +52,3 @@ func TestBuildKnownKeysPrompt_WithKeys(t *testing.T) {
 		}
 	}
 }
-
-func TestBuildKnownPreferenceKeysPrompt_Empty(t *testing.T) {
-	if got := BuildKnownPreferenceKeysPrompt(nil); got != "" {
-		t.Errorf("BuildKnownPreferenceKeysPrompt(nil) = %q, want empty string", got)
-	}
-	if got := BuildKnownPreferenceKeysPrompt([]string{}); got != "" {
-		t.Errorf("BuildKnownPreferenceKeysPrompt([]) = %q, want empty string", got)
-	}
-}
-
-func TestBuildKnownPreferenceKeysPrompt_WithKeys(t *testing.T) {
-	got := BuildKnownPreferenceKeysPrompt([]string{"font_size", "language", "visual_style"})
-
-	for _, want := range []string{"font_size", "language", "visual_style", "再利用"} {
-		if !strings.Contains(got, want) {
-			t.Errorf("BuildKnownPreferenceKeysPrompt() does not contain %q:\n%s", want, got)
-		}
-	}
-}

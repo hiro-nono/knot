@@ -43,6 +43,13 @@ func BuildSystemPrompt() string {
 statusがconfirmed以外の場合は、発信者に確認するための具体的な質問をquestionに含めてください。
 confirmedの場合、questionはnullにしてください。
 
+これまでの会話で既に尋ねた質問に対し、発信者の直前の回答が曖昧・的外れ・無回答などで
+期待する情報が得られなかった場合、全く同じ表現の質問をそのまま繰り返してはいけません。
+次のいずれかの方法で聞き方を変えてください。
+- 具体例や選択肢を挙げて、より答えやすい聞き方にする
+- より粒度の小さい、具体的な質問に分解する
+- 表現を平易にする、言い換える
+
 optionsは、interaction_typeが%sまたは%sの場合にのみ選択肢を設定してください。
 それ以外(%sまたはnull)の場合、optionsは空配列にしてください。`,
 		domain.SourceTypeIdentity,
@@ -89,31 +96,6 @@ func BuildKnownKeysPrompt(knownKeys map[domain.SourceType][]string) string {
 		sort.Strings(sortedKeys)
 		fmt.Fprintf(&b, "- %s: %s\n", t, strings.Join(sortedKeys, ", "))
 	}
-
-	return b.String()
-}
-
-// BuildKnownPreferenceKeysPrompt は既に定義されているPreferenceキーの候補をまとめ、
-// AIが新しいキーを作る前に再利用を検討できるようにするための追加プロンプトを組み立てる。
-//
-// keyは自由記述の文字列だが、アプリ側で一貫した語彙にするため、
-// 該当する概念であれば新しいキーを作らずここに挙げたキーを再利用させる。
-// 既存のどれにも当てはまらない全く新しい概念の場合のみ、新しいキーの作成を許可する。
-//
-// keysが空の場合は空文字列を返す。
-func BuildKnownPreferenceKeysPrompt(keys []string) string {
-	if len(keys) == 0 {
-		return ""
-	}
-
-	sorted := append([]string(nil), keys...)
-	sort.Strings(sorted)
-
-	var b strings.Builder
-	b.WriteString("次は、既に定義されているPreferenceキーの候補です。\n")
-	b.WriteString("該当する概念であれば、新しいキーを作らずこれらを再利用してください。\n")
-	b.WriteString("既存のどれにも当てはまらない全く新しい概念の場合のみ、新しいキーを作成してください。\n\n")
-	b.WriteString(strings.Join(sorted, ", "))
 
 	return b.String()
 }

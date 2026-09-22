@@ -3,6 +3,7 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 
+import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Chip, type ChipTone } from "@/components/ui/chip";
 import { Composer } from "@/components/ui/chat/composer";
@@ -71,6 +72,7 @@ export default function NewInformationPage() {
   const [history, setHistory] = useState<Message[]>([]);
   const [bubbles, setBubbles] = useState<ChatBubble[]>([]);
   const [sources, setSources] = useState<StructuredSource[]>([]);
+  const [savedInformationId, setSavedInformationId] = useState<string | null>(null);
 
   const started = history.length > 0;
 
@@ -93,19 +95,29 @@ export default function NewInformationPage() {
             { id: newId(), role: "assistant", content: describeAssistantTurn(response) },
           ]);
 
+          // すべての項目が確定した時点でバックエンドが既にInformationを
+          // 保存済みのため、ここではまだ遷移せず「保存する」ボタンを
+          // 押せる状態にするだけに留める。実際にいつ遷移するかは
+          // 発信者自身が内容を確認してから選べるようにする。
           if (response.confirmed && response.information_id) {
             if (accessType === "restricted" && myAccount?.user_id) {
               try {
                 await addRecipient(response.information_id, myAccount.user_id);
               } catch {
-                // 自分をrecipientに追加できなくてもプレビュー遷移は継続する。
+                // 自分をrecipientに追加できなくても保存自体は完了しているので続行する。
               }
             }
-            router.push(`/informations/${response.information_id}`);
+            setSavedInformationId(response.information_id);
           }
         },
       },
     );
+  }
+
+  function handleConfirmSave() {
+    if (savedInformationId) {
+      router.push(`/informations/${savedInformationId}`);
+    }
   }
 
   return (
@@ -150,17 +162,43 @@ export default function NewInformationPage() {
 
           <Composer
             onSend={handleSend}
-            disabled={processInformation.isPending}
-            placeholder={started ? "続きを入力..." : "共有したい情報を入力してください"}
+            disabled={processInformation.isPending || Boolean(savedInformationId)}
+            placeholder={
+              savedInformationId
+                ? "保存が完了しました"
+                : started
+                  ? "続きを入力..."
+                  : "共有したい情報を入力してください"
+            }
           />
         </Card>
 
         {sources.length > 0 ? (
-          <div className="flex flex-col gap-2">
-            <h2 className="text-sm font-medium text-zinc-500">整理された項目</h2>
-            {sources.map((source) => (
-              <SourceCard key={source.key} source={source} />
-            ))}
+          <div className="flex flex-col gap-3">
+            <div>
+              <h2 className="mb-2 text-sm font-medium text-zinc-500">整理された項目</h2>
+              <div className="flex flex-col gap-2">
+                {sources.map((source) => (
+                  <SourceCard key={source.key} source={source} />
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="mb-1.5 text-xs text-zinc-500">
+                {savedInformationId
+                  ? "すべての項目が確定し、保存できます。"
+                  : `確定した項目: ${sources.filter((s) => s.status === "confirmed").length} / ${sources.length}`}
+              </p>
+              <Button
+                type="button"
+                disabled={!savedInformationId}
+                onClick={handleConfirmSave}
+                className={savedInformationId ? "" : "blur-[1.5px]"}
+              >
+                {savedInformationId ? "保存して資料を確認する" : "すべて確定すると保存できます"}
+              </Button>
+            </div>
           </div>
         ) : null}
       </div>
