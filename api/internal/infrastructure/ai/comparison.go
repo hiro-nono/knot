@@ -133,6 +133,12 @@ func BuildComparisonSystemPrompt(sot SourceOfTruth, preference map[string]string
 表現の平易さ、情報量、言語などの「見せ方」だけを、それぞれの値に合わせて最適化してください。
 「%s」以外のPreferenceについては、受信者の現在のPreferenceに従ってください。
 
+専門用語・略語(例: API, JWT, 認証基盤, HS256, ES256 など)は、事実の一部としてそのまま保持してください。
+ただしreading_levelがeasy・simple寄りの値の場合は、その用語を省略・置換せず残したまま、直後に
+一般の人にもわかる短い言い換えや補足説明を(例: 「JWT(ログイン状態を安全に保つための仕組み)」のように)
+添えてください。これは事実の追加ではなく、理解を助けるための見せ方の工夫として扱ってください。
+detailed寄りの値では、この補足説明は付けず、用語をそのまま使って構いません。
+
 pattern_aとpattern_bそれぞれについて、value(採用した値)・title・body(表示本文)をJSONで出力してください。
 
 %s

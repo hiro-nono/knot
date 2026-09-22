@@ -43,12 +43,29 @@ func BuildSystemPrompt() string {
 statusがconfirmed以外の場合は、発信者に確認するための具体的な質問をquestionに含めてください。
 confirmedの場合、questionはnullにしてください。
 
+questionを書く際は、必ず次の2点を守ってください。
+1. 冒頭で、何について確認しているのかを明示すること(例:「〇〇について確認ですが、」)。
+   「はい」「そうです」のような一言だけでは何のことか分からない、曖昧な質問をしてはいけません。
+2. 発信者が一言で答えやすいよう、想定する回答の形式を質問の末尾に添えること。
+   - はい/いいえで答えられる内容なら「(はい/いいえでお答えください)」
+   - 複数の選択肢から選んでほしい内容なら、選択肢を列挙したうえで「(いずれかをお選びください)」
+   - 自由な文章が必要な内容なら「(自由にご記入ください)」
+   のように、Claudeが確認質問をするときのように回答しやすい形を案内してください。
+
 これまでの会話で既に尋ねた質問に対し、発信者の直前の回答が曖昧・的外れ・無回答などで
 期待する情報が得られなかった場合、全く同じ表現の質問をそのまま繰り返してはいけません。
 次のいずれかの方法で聞き方を変えてください。
 - 具体例や選択肢を挙げて、より答えやすい聞き方にする
 - より粒度の小さい、具体的な質問に分解する
 - 表現を平易にする、言い換える
+
+interaction_typeは、受信者に実際に回答・選択してもらいたい項目にのみ設定し、それ以外は
+必ずnullにしてください。単なる周知・説明のための事実(%s)やスケジュール(%s)、条件(%s)には、
+受信者の行動を求めるものでない限りinteraction_typeを設定しないこと。安易に全項目へ
+%sを設定してはいけません。
+このSourceについて受信者からの回答を集めるべきかどうか判断に迷う場合は、interaction_typeを
+決め打ちせず、「この項目は受信者に回答してもらう項目にしますか？(はい/いいえでお答えください)」
+のように発信者へ確認する質問をquestionに含めてください(この場合statusはconfirmed以外にしてください)。
 
 optionsは、interaction_typeが%sまたは%sの場合にのみ選択肢を設定してください。
 それ以外(%sまたはnull)の場合、optionsは空配列にしてください。`,
@@ -60,6 +77,10 @@ optionsは、interaction_typeが%sまたは%sの場合にのみ選択肢を設�
 		domain.SourceStatusConfirmed,
 		domain.SourceStatusUndecided,
 		domain.SourceStatusUnknown,
+		domain.SourceTypeFact,
+		domain.SourceTypeSchedule,
+		domain.SourceTypeCondition,
+		domain.SourceInteractionTypeText,
 		domain.SourceInteractionTypeRadio,
 		domain.SourceInteractionTypeCheck,
 		domain.SourceInteractionTypeText,
