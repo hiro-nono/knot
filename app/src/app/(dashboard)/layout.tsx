@@ -18,7 +18,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const { session, isLoading: isSessionLoading } = useSupabaseSession();
   const myAccount = useMyAccount(Boolean(session));
 
-  const accountNotFound = myAccount.error instanceof ApiError && myAccount.error.isNotFound;
+  // onboarding完了直後は、POST /accountsのonSuccessでGET /accounts/meの
+  // キャッシュをinvalidateしてから"/"へ遷移してくる。その際、再取得
+  // (isFetching)が終わるまではキャッシュに古い404エラーが残ったままになるため、
+  // isFetching中はそのエラーを「未登録」と確定させず、再取得の結果を待つ。
+  // これを怠ると、登録直後でも古い404を拾って/onboardingへ引き戻してしまう。
+  const isResolvingAccount = myAccount.isLoading || (myAccount.isFetching && myAccount.isError);
+  const accountNotFound =
+    !isResolvingAccount && myAccount.error instanceof ApiError && myAccount.error.isNotFound;
 
   useEffect(() => {
     if (!isSessionLoading && !session) {
@@ -30,7 +37,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
     }
   }, [isSessionLoading, session, accountNotFound, router]);
 
-  if (isSessionLoading || !session || myAccount.isLoading || accountNotFound) {
+  if (isSessionLoading || !session || isResolvingAccount || accountNotFound) {
     return null;
   }
 

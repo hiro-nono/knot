@@ -21,13 +21,18 @@ export function useMyAccount(enabled = true) {
 }
 
 // POST /accounts
+//
+// 登録直後にDashboardLayoutがGET /accounts/meを未確定のまま評価してしまう
+// (invalidateQueriesは、その時点でまだ観測者が存在しないため実際の再取得を
+// 保証しない)競合を避けるため、レスポンスの内容をそのままキャッシュへ
+// 書き込み、DashboardLayout側の初回読み取りが必ず成功状態から始まるようにする。
 export function useRegisterAccount() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: registerAccount,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: accountKeys.me() });
+    onSuccess: (account) => {
+      queryClient.setQueryData(accountKeys.me(), account);
     },
   });
 }
