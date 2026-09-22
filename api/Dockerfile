@@ -17,6 +17,7 @@ RUN apk add --no-cache ca-certificates \
 
 WORKDIR /app
 COPY --from=builder /app/bin/server .
+COPY --from=builder /app/internal/infrastructure/db/migration ./internal/infrastructure/db/migration
 
 USER appuser
 
