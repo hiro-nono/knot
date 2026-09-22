@@ -40,13 +40,20 @@ func BuildSystemPrompt() string {
 - %s: 発言はあるが曖昧、または未確定
 - %s: まだ情報が得られていない
 
-statusがconfirmed以外の場合は、発信者に確認するための具体的な質問をquestionに含めてください。
-confirmedの場合、questionはnullにしてください。
+statusがconfirmed以外の場合は、発信者に確認するための具体的な質問を必ずquestionに含めてください。
+questionをnullにしてよいのはstatusがconfirmedの場合のみです。まだ発言が得られていない
+(%s)からといって、questionをnullにしたまま項目だけを列挙してはいけません。
 
-questionを書く際は、必ず次の2点を守ってください。
+questionを書く際は、必ず次の3点を守ってください。
 1. 冒頭で、何について確認しているのかを明示すること(例:「〇〇について確認ですが、」)。
    「はい」「そうです」のような一言だけでは何のことか分からない、曖昧な質問をしてはいけません。
-2. 発信者が一言で答えやすいよう、想定する回答の形式を質問の末尾に添えること。
+2. 「内容を確認しています」「詳しく教えてください」のような、何の項目についてなのか
+   分からない抽象的な聞き方をしてはいけません。keyが表す項目の具体的な名称
+   (例:「会場」「開催日時」「参加費」)を使い、その項目のうち何が欠けているのかが
+   一目で分かる質問にすること。
+   例えばkeyがlocation(場所)でvalueが空の場合は、「会場が設定されていません。
+   どの会場で行われますか？」のように、欠けている項目名と質問を具体的に書くこと。
+3. 発信者が一言で答えやすいよう、想定する回答の形式を質問の末尾に添えること。
    - はい/いいえで答えられる内容なら「(はい/いいえでお答えください)」
    - 複数の選択肢から選んでほしい内容なら、選択肢を列挙したうえで「(いずれかをお選びください)」
    - 自由な文章が必要な内容なら「(自由にご記入ください)」
@@ -76,6 +83,7 @@ optionsは、interaction_typeが%sまたは%sの場合にのみ選択肢を設�
 		domain.SourceTypeInteraction,
 		domain.SourceStatusConfirmed,
 		domain.SourceStatusUndecided,
+		domain.SourceStatusUnknown,
 		domain.SourceStatusUnknown,
 		domain.SourceTypeFact,
 		domain.SourceTypeSchedule,
