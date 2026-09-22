@@ -83,15 +83,13 @@ func (c *DisplayController) ListSources(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, views)
 }
 
-type prepareComparisonRequest struct {
-	Key    string `json:"key" binding:"required"`
-	ValueA string `json:"value_a" binding:"required"`
-	ValueB string `json:"value_b" binding:"required"`
+type generateComparisonRequest struct {
+	Key string `json:"key" binding:"required"`
 }
 
-// PrepareComparison はPOST /informations/:id/display/comparisons を処理する。
-// 指定したPreferenceキーの値をA/Bそれぞれに変えた表示を2パターン生成する。
-func (c *DisplayController) PrepareComparison(ctx *gin.Context) {
+// GenerateComparison はPOST /informations/:id/display/comparisons を処理する。
+// 指定したPreferenceキーについて、AIが決めた対照的な2パターン(A/B)の表示を生成する。
+func (c *DisplayController) GenerateComparison(ctx *gin.Context) {
 	informationID, ok := parseInformationID(ctx)
 	if !ok {
 		return
@@ -102,20 +100,16 @@ func (c *DisplayController) PrepareComparison(ctx *gin.Context) {
 		return
 	}
 
-	var req prepareComparisonRequest
+	var req generateComparisonRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	output, err := c.usecase.PrepareComparison(ctx.Request.Context(), usecase.PrepareComparisonInput{
+	output, err := c.usecase.GenerateComparison(ctx.Request.Context(), usecase.GenerateComparisonInput{
 		InformationID: informationID,
 		RecipientID:   recipientID,
-		Comparison: usecase.PreferenceComparison{
-			Key:    req.Key,
-			ValueA: req.ValueA,
-			ValueB: req.ValueB,
-		},
+		Key:           req.Key,
 	})
 	if err != nil {
 		writeError(ctx, err)
@@ -125,14 +119,14 @@ func (c *DisplayController) PrepareComparison(ctx *gin.Context) {
 	ctx.JSON(http.StatusOK, output)
 }
 
-type selectComparisonRequest struct {
-	Comparison usecase.PreferenceComparison `json:"comparison" binding:"required"`
-	Selected   string                       `json:"selected" binding:"required,oneof=a b"`
+type applyPreferenceRequest struct {
+	Key   string `json:"key" binding:"required"`
+	Value string `json:"value" binding:"required"`
 }
 
-// SelectComparison はPOST /informations/:id/display/comparisons/selection を処理する。
-// 受信者が選んだA/Bの結果をもとに、比較対象だったPreferenceを更新する。
-func (c *DisplayController) SelectComparison(ctx *gin.Context) {
+// ApplyPreference はPOST /informations/:id/display/comparisons/apply を処理する。
+// GenerateComparisonで確認した候補の値を実際のPreferenceとして永続化する。
+func (c *DisplayController) ApplyPreference(ctx *gin.Context) {
 	informationID, ok := parseInformationID(ctx)
 	if !ok {
 		return
@@ -143,17 +137,17 @@ func (c *DisplayController) SelectComparison(ctx *gin.Context) {
 		return
 	}
 
-	var req selectComparisonRequest
+	var req applyPreferenceRequest
 	if err := ctx.ShouldBindJSON(&req); err != nil {
 		ctx.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	err := c.usecase.SelectComparison(ctx.Request.Context(), usecase.SelectComparisonInput{
+	err := c.usecase.ApplyPreference(ctx.Request.Context(), usecase.ApplyPreferenceInput{
 		InformationID: informationID,
 		RecipientID:   recipientID,
-		Comparison:    req.Comparison,
-		Selected:      req.Selected,
+		Key:           req.Key,
+		Value:         req.Value,
 	})
 	if err != nil {
 		writeError(ctx, err)
@@ -169,7 +163,8 @@ type chatRequest struct {
 }
 
 // Chat はPOST /informations/:id/display/chat を処理する。
-// 受信者からの表示調整の要望を1ターン処理する。
+// 受信者からの、資料の情報についての質問に1ターン回答する
+// (表示の見せ方を調整する機能ではない)。
 func (c *DisplayController) Chat(ctx *gin.Context) {
 	informationID, ok := parseInformationID(ctx)
 	if !ok {

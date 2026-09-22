@@ -3,9 +3,22 @@ package usecase
 import "knot-api/internal/domain"
 
 // DisplayContent は受信者向けに最適化された表示内容を表す。
+// BodyはTailwindCSSクラスで装飾された安全なHTML断片であり、
+// クライアント側はサニタイズした上でそのまま描画する想定。
 type DisplayContent struct {
 	Title string `json:"title"`
 	Body  string `json:"body"`
+}
+
+// GenerateDisplayOutput はGenerateDisplayの出力。
+// HasPreferenceは、受信者がこれまでに何らかのPreferenceを記録済みかどうかを表す。
+// falseの場合、クライアント側はA/B比較を提示してPreferenceの初期値を
+// 決めてもらうきっかけとして使う想定(まだ何も分かっていない受信者にのみ
+// A/Bを行い、既にPreferenceがある受信者には毎回A/Bを見せない)。
+type GenerateDisplayOutput struct {
+	Title         string `json:"title"`
+	Body          string `json:"body"`
+	HasPreference bool   `json:"has_preference"`
 }
 
 // OptionView はOptionを外部に返却するための表現。

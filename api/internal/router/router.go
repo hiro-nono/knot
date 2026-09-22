@@ -44,8 +44,8 @@ func New(
 	informations.GET("/:id/recipients", information.ListRecipients)
 	informations.DELETE("/:id/recipients/:user_id", information.RemoveRecipient)
 	informations.POST("/:id/display", display.GenerateDisplay)
-	informations.POST("/:id/display/comparisons", display.PrepareComparison)
-	informations.POST("/:id/display/comparisons/selection", display.SelectComparison)
+	informations.POST("/:id/display/comparisons", display.GenerateComparison)
+	informations.POST("/:id/display/comparisons/apply", display.ApplyPreference)
 	informations.POST("/:id/display/chat", display.Chat)
 	informations.GET("/:id/responses", response.ListResponses)
 

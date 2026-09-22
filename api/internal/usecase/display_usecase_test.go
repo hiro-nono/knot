@@ -3,7 +3,6 @@ package usecase
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 
 	"knot-api/internal/domain"
@@ -103,9 +102,10 @@ func (r *fakeDisplayRecipientRepository) Delete(ctx context.Context, information
 }
 
 type fakeDisplayChatClient struct {
-	displayResponse *ai.DisplayContent
-	chatResponse    *ai.PreferenceChatResponse
-	lastMessages    []ai.Message
+	displayResponse    *ai.DisplayContent
+	chatResponse       *ai.InformationChatResponse
+	comparisonResponse *ai.ComparisonContent
+	lastMessages       []ai.Message
 }
 
 func (f *fakeDisplayChatClient) ChatCompletionDisplay(ctx context.Context, model string, messages []ai.Message) (*ai.DisplayContent, error) {
@@ -113,9 +113,14 @@ func (f *fakeDisplayChatClient) ChatCompletionDisplay(ctx context.Context, model
 	return f.displayResponse, nil
 }
 
-func (f *fakeDisplayChatClient) ChatCompletionPreferenceChat(ctx context.Context, model string, messages []ai.Message) (*ai.PreferenceChatResponse, error) {
+func (f *fakeDisplayChatClient) ChatCompletionInformationChat(ctx context.Context, model string, messages []ai.Message) (*ai.InformationChatResponse, error) {
 	f.lastMessages = messages
 	return f.chatResponse, nil
+}
+
+func (f *fakeDisplayChatClient) ChatCompletionComparison(ctx context.Context, model string, messages []ai.Message) (*ai.ComparisonContent, error) {
+	f.lastMessages = messages
+	return f.comparisonResponse, nil
 }
 
 func newTestDisplayUsecase(chat *fakeDisplayChatClient, information *domain.Information, sources []*domain.Source) (*DisplayUsecase, *fakePreferenceRepository) {
@@ -165,151 +170,136 @@ func TestDisplayUsecase_GenerateDisplay(t *testing.T) {
 	if out.Title != "お知らせ" || out.Body != "本文" {
 		t.Errorf("out = %+v, unexpected", out)
 	}
+	if out.HasPreference {
+		t.Error("HasPreference = true, want false (recipient has no preference yet)")
+	}
 	if len(preferenceRepo.saved) != 0 {
 		t.Error("preference was saved, want no save for a plain display generation")
 	}
 }
 
-func TestDisplayUsecase_PrepareComparison_And_SelectComparison(t *testing.T) {
+func TestDisplayUsecase_GenerateDisplay_HasPreferenceTrueWhenPreferenceExists(t *testing.T) {
 	information := newTestPublicInformation(t)
 	source, err := domain.NewSource(information.ID(), domain.SourceTypeSchedule, "date", "2026-10-01", domain.SourceStatusConfirmed, nil)
 	if err != nil {
 		t.Fatalf("NewSource() error = %v", err)
 	}
 
+	recipientID := uuid.New()
+	preference, err := domain.NewPreference(recipientID)
+	if err != nil {
+		t.Fatalf("NewPreference() error = %v", err)
+	}
+	if err := preference.Set("reading_level", "easy"); err != nil {
+		t.Fatalf("Set() error = %v", err)
+	}
+
 	chat := &fakeDisplayChatClient{displayResponse: &ai.DisplayContent{Title: "お知らせ", Body: "本文"}}
+	infoRepo := &fakeDisplayInformationRepository{information: information}
+	sourceRepo := &fakeDisplaySourceRepository{sources: []*domain.Source{source}}
+	optionRepo := &fakeDisplayOptionRepository{optionsBySource: map[uuid.UUID][]*domain.Option{}}
+	preferenceRepo := &fakePreferenceRepository{preference: preference}
+	uc := NewDisplayUsecase(chat, "opus", infoRepo, sourceRepo, optionRepo, preferenceRepo, newFakeDisplayRecipientRepository())
+
+	out, err := uc.GenerateDisplay(context.Background(), GenerateDisplayInput{
+		InformationID: information.ID(),
+		RecipientID:   recipientID,
+	})
+	if err != nil {
+		t.Fatalf("GenerateDisplay() error = %v", err)
+	}
+	if !out.HasPreference {
+		t.Error("HasPreference = false, want true (recipient already has a preference)")
+	}
+}
+
+func TestDisplayUsecase_GenerateComparison_And_ApplyPreference(t *testing.T) {
+	information := newTestPublicInformation(t)
+	source, err := domain.NewSource(information.ID(), domain.SourceTypeSchedule, "date", "2026-10-01", domain.SourceStatusConfirmed, nil)
+	if err != nil {
+		t.Fatalf("NewSource() error = %v", err)
+	}
+
+	chat := &fakeDisplayChatClient{
+		comparisonResponse: &ai.ComparisonContent{
+			PatternA: ai.ComparisonPattern{Value: "easy", Title: "お知らせ", Body: "かんたんな本文"},
+			PatternB: ai.ComparisonPattern{Value: "detailed", Title: "お知らせ", Body: "詳しい本文"},
+		},
+	}
 	uc, preferenceRepo := newTestDisplayUsecase(chat, information, []*domain.Source{source})
 
 	recipientID := uuid.New()
-	comparison := PreferenceComparison{Key: "reading_level", ValueA: "easy", ValueB: "detailed"}
 
-	prepared, err := uc.PrepareComparison(context.Background(), PrepareComparisonInput{
+	generated, err := uc.GenerateComparison(context.Background(), GenerateComparisonInput{
 		InformationID: information.ID(),
 		RecipientID:   recipientID,
-		Comparison:    comparison,
+		Key:           "reading_level",
 	})
 	if err != nil {
-		t.Fatalf("PrepareComparison() error = %v", err)
+		t.Fatalf("GenerateComparison() error = %v", err)
 	}
-	if prepared.Comparison != comparison {
-		t.Errorf("Comparison = %+v, want %+v", prepared.Comparison, comparison)
+	if generated.PatternA.Value != "easy" || generated.PatternB.Value != "detailed" {
+		t.Errorf("generated = %+v, unexpected", generated)
+	}
+	if generated.PatternB.Display.Body != "詳しい本文" {
+		t.Errorf("PatternB.Display.Body = %q, want %q", generated.PatternB.Display.Body, "詳しい本文")
 	}
 	if len(preferenceRepo.saved) != 0 {
-		t.Error("preference was saved during PrepareComparison, want no save until SelectComparison")
+		t.Error("preference was saved during GenerateComparison, want no save until ApplyPreference")
 	}
 
-	err = uc.SelectComparison(context.Background(), SelectComparisonInput{
+	err = uc.ApplyPreference(context.Background(), ApplyPreferenceInput{
 		InformationID: information.ID(),
 		RecipientID:   recipientID,
-		Comparison:    comparison,
-		Selected:      "a",
+		Key:           "reading_level",
+		Value:         generated.PatternB.Value,
 	})
 	if err != nil {
-		t.Fatalf("SelectComparison() error = %v", err)
+		t.Fatalf("ApplyPreference() error = %v", err)
 	}
 
 	if len(preferenceRepo.saved) != 1 {
 		t.Fatalf("len(saved) = %d, want 1", len(preferenceRepo.saved))
 	}
 	v, ok := preferenceRepo.saved[0].Get("reading_level")
-	if !ok || v != "easy" {
-		t.Errorf("saved preference reading_level = (%q, %v), want (\"easy\", true)", v, ok)
-	}
-
-	if err := uc.SelectComparison(context.Background(), SelectComparisonInput{
-		InformationID: information.ID(),
-		RecipientID:   recipientID,
-		Comparison:    comparison,
-		Selected:      "invalid",
-	}); err == nil {
-		t.Error(`SelectComparison(Selected: "invalid") error = nil, want error`)
+	if !ok || v != "detailed" {
+		t.Errorf("saved preference reading_level = (%q, %v), want (\"detailed\", true)", v, ok)
 	}
 }
 
-func TestDisplayUsecase_Chat_Persistent(t *testing.T) {
+func TestDisplayUsecase_Chat_ReturnsAnswerWithoutUpdatingPreference(t *testing.T) {
 	information := newTestPublicInformation(t)
 
-	persistent := true
-	key := "reading_level"
-	value := "easy"
 	chat := &fakeDisplayChatClient{
-		chatResponse: &ai.PreferenceChatResponse{
-			Display:         ai.DisplayContent{Title: "お知らせ", Body: "かんたんな本文"},
-			IsPersistent:    &persistent,
-			PreferenceKey:   &key,
-			PreferenceValue: &value,
-		},
+		chatResponse: &ai.InformationChatResponse{Answer: "集合時間は10時です。"},
 	}
 	uc, preferenceRepo := newTestDisplayUsecase(chat, information, nil)
 
 	out, err := uc.Chat(context.Background(), ChatInput{
 		InformationID: information.ID(),
 		RecipientID:   uuid.New(),
-		UserInput:     "もっと簡単にして、これからずっとそうして",
+		UserInput:     "集合時間は何時ですか？",
 	})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
 	}
 
-	if !out.PreferenceUpdated {
-		t.Error("PreferenceUpdated = false, want true")
+	if out.Answer != "集合時間は10時です。" {
+		t.Errorf("Answer = %q, want %q", out.Answer, "集合時間は10時です。")
 	}
-	if out.NeedsConfirmation {
-		t.Error("NeedsConfirmation = true, want false")
-	}
-	if len(preferenceRepo.saved) != 1 {
-		t.Fatalf("len(saved) = %d, want 1", len(preferenceRepo.saved))
-	}
-	if v, _ := preferenceRepo.saved[0].Get("reading_level"); v != "easy" {
-		t.Errorf("saved reading_level = %q, want \"easy\"", v)
+	if len(preferenceRepo.saved) != 0 {
+		t.Error("preference was saved, want Chat to never write Preference (only A/B selection may)")
 	}
 	if len(out.Messages) != 3 {
 		t.Errorf("len(Messages) = %d, want 3 (system, user, assistant)", len(out.Messages))
 	}
 }
 
-func TestDisplayUsecase_Chat_NeedsConfirmation(t *testing.T) {
-	information := newTestPublicInformation(t)
-
-	question := "今後も常にこの設定にしますか？"
-	chat := &fakeDisplayChatClient{
-		chatResponse: &ai.PreferenceChatResponse{
-			Display:              ai.DisplayContent{Title: "お知らせ", Body: "本文"},
-			ConfirmationQuestion: &question,
-		},
-	}
-	uc, preferenceRepo := newTestDisplayUsecase(chat, information, nil)
-
-	out, err := uc.Chat(context.Background(), ChatInput{
-		InformationID: information.ID(),
-		RecipientID:   uuid.New(),
-		UserInput:     "簡単にして",
-	})
-	if err != nil {
-		t.Fatalf("Chat() error = %v", err)
-	}
-
-	if out.PreferenceUpdated {
-		t.Error("PreferenceUpdated = true, want false")
-	}
-	if !out.NeedsConfirmation {
-		t.Error("NeedsConfirmation = false, want true")
-	}
-	if out.ConfirmationQuestion == nil || *out.ConfirmationQuestion != question {
-		t.Errorf("ConfirmationQuestion = %v, want %q", out.ConfirmationQuestion, question)
-	}
-	if len(preferenceRepo.saved) != 0 {
-		t.Error("preference was saved, want no save while confirmation is pending")
-	}
-}
-
-func TestDisplayUsecase_Chat_IncludesPredefinedPreferenceKeysOnFirstTurnOnly(t *testing.T) {
+func TestDisplayUsecase_Chat_NoDuplicateSystemPromptOnSecondTurn(t *testing.T) {
 	information := newTestPublicInformation(t)
 
 	chat := &fakeDisplayChatClient{
-		chatResponse: &ai.PreferenceChatResponse{
-			Display: ai.DisplayContent{Title: "お知らせ", Body: "本文"},
-		},
+		chatResponse: &ai.InformationChatResponse{Answer: "本文の内容です。"},
 	}
 	uc, _ := newTestDisplayUsecase(chat, information, nil)
 	recipientID := uuid.New()
@@ -317,7 +307,7 @@ func TestDisplayUsecase_Chat_IncludesPredefinedPreferenceKeysOnFirstTurnOnly(t *
 	out, err := uc.Chat(context.Background(), ChatInput{
 		InformationID: information.ID(),
 		RecipientID:   recipientID,
-		UserInput:     "もっと簡単にして",
+		UserInput:     "この資料について教えてください",
 	})
 	if err != nil {
 		t.Fatalf("Chat() error = %v", err)
@@ -325,17 +315,12 @@ func TestDisplayUsecase_Chat_IncludesPredefinedPreferenceKeysOnFirstTurnOnly(t *
 	if len(chat.lastMessages) == 0 || chat.lastMessages[0].Role != ai.RoleSystem {
 		t.Fatalf("lastMessages[0] is not a system message: %+v", chat.lastMessages)
 	}
-	for _, key := range domain.PredefinedPreferenceKeys {
-		if !strings.Contains(chat.lastMessages[0].Content, key) {
-			t.Errorf("system prompt does not contain predefined preference key %q:\n%s", key, chat.lastMessages[0].Content)
-		}
-	}
 
 	if _, err := uc.Chat(context.Background(), ChatInput{
 		InformationID: information.ID(),
 		RecipientID:   recipientID,
 		Messages:      out.Messages,
-		UserInput:     "はい",
+		UserInput:     "ありがとう",
 	}); err != nil {
 		t.Fatalf("Chat() (2nd turn) error = %v", err)
 	}

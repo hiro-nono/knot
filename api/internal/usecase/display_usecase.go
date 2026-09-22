@@ -17,7 +17,8 @@ import (
 // テストではAIへの実際のHTTP通信を行わないfakeに差し替える。
 type displayChatClient interface {
 	ChatCompletionDisplay(ctx context.Context, model string, messages []ai.Message) (*ai.DisplayContent, error)
-	ChatCompletionPreferenceChat(ctx context.Context, model string, messages []ai.Message) (*ai.PreferenceChatResponse, error)
+	ChatCompletionInformationChat(ctx context.Context, model string, messages []ai.Message) (*ai.InformationChatResponse, error)
+	ChatCompletionComparison(ctx context.Context, model string, messages []ai.Message) (*ai.ComparisonContent, error)
 }
 
 // DisplayUsecase は確定済みのSource of Truthを、受信者(認証済みのUser)の
@@ -68,7 +69,7 @@ type GenerateDisplayInput struct {
 // GenerateDisplay は指定したInformationを、受信者のPreferenceに応じて
 // 最適化した表示内容として生成する。
 // 受信者がそのInformationを閲覧する権限を持たない場合はdomain.ErrForbiddenを返す。
-func (u *DisplayUsecase) GenerateDisplay(ctx context.Context, input GenerateDisplayInput) (*DisplayContent, error) {
+func (u *DisplayUsecase) GenerateDisplay(ctx context.Context, input GenerateDisplayInput) (*GenerateDisplayOutput, error) {
 	sot, err := u.loadSourceOfTruth(ctx, input.InformationID, input.RecipientID)
 	if err != nil {
 		return nil, err
@@ -84,36 +85,43 @@ func (u *DisplayUsecase) GenerateDisplay(ctx context.Context, input GenerateDisp
 		return nil, err
 	}
 
-	return content, nil
+	return &GenerateDisplayOutput{
+		Title:         content.Title,
+		Body:          content.Body,
+		HasPreference: len(preference.Items()) > 0,
+	}, nil
 }
 
-// PreferenceComparison はA/B比較で、どのPreferenceキーの、どの値同士を
-// 比較しているかを表す。controller/クライアントとの間でもそのまま
-// やり取りされ、選択結果を送る際にどの比較だったかを特定するために使う。
-type PreferenceComparison struct {
-	Key    string `json:"key"`
-	ValueA string `json:"value_a"`
-	ValueB string `json:"value_b"`
-}
-
-// PrepareComparisonInput はA/B比較用の表示を2パターン生成するための入力。
-type PrepareComparisonInput struct {
+// GenerateComparisonInput は、指定したPreferenceキーについて、AIが決めた
+// 対照的な2つの値(傾向)による表示A/Bを生成するための入力。
+//
+// どの値を比較するかを受信者に自由入力させるのではなく、AIがそのキーにとって
+// 意味のある対照的な2値を自分で決める(例: reading_levelなら"easy"と"detailed")。
+// 1回のAI呼び出しでA/B両方を生成するため、無駄な追加呼び出しは発生しない。
+type GenerateComparisonInput struct {
 	InformationID uuid.UUID
 	RecipientID   uuid.UUID
-	Comparison    PreferenceComparison
+	Key           string
 }
 
-// PrepareComparisonOutput はPrepareComparisonの出力。
-type PrepareComparisonOutput struct {
-	DisplayA   DisplayContent       `json:"display_a"`
-	DisplayB   DisplayContent       `json:"display_b"`
-	Comparison PreferenceComparison `json:"comparison"`
+// ComparisonPattern は、比較対象のPreferenceキーについてAIが決めた
+// 1つの値(傾向)と、その値を採用した場合の表示を表す。
+type ComparisonPattern struct {
+	Value   string         `json:"value"`
+	Display DisplayContent `json:"display"`
 }
 
-// PrepareComparison は、Comparisonで指定したPreferenceキーの値をValueA/ValueBに
-// それぞれ変えた場合の表示を2パターン生成する。
-// この時点ではPreferenceの永続化は行わない(選択結果はSelectComparisonで反映する)。
-func (u *DisplayUsecase) PrepareComparison(ctx context.Context, input PrepareComparisonInput) (*PrepareComparisonOutput, error) {
+// GenerateComparisonOutput はGenerateComparisonの出力。
+type GenerateComparisonOutput struct {
+	Key      string            `json:"key"`
+	PatternA ComparisonPattern `json:"pattern_a"`
+	PatternB ComparisonPattern `json:"pattern_b"`
+}
+
+// GenerateComparison は、Keyで指定したPreferenceキーについて、AIが決めた
+// 対照的な2パターン(A/B)の表示を生成する。
+// この時点ではPreferenceの永続化は行わない(採用はApplyPreferenceで行う)。
+func (u *DisplayUsecase) GenerateComparison(ctx context.Context, input GenerateComparisonInput) (*GenerateComparisonOutput, error) {
 	sot, err := u.loadSourceOfTruth(ctx, input.InformationID, input.RecipientID)
 	if err != nil {
 		return nil, err
@@ -124,46 +132,44 @@ func (u *DisplayUsecase) PrepareComparison(ctx context.Context, input PrepareCom
 		return nil, fmt.Errorf("load preference: %w", err)
 	}
 
-	displayA, err := u.generateDisplay(ctx, *sot, withOverride(preference.Items(), input.Comparison.Key, input.Comparison.ValueA))
+	prompt, err := ai.BuildComparisonSystemPrompt(*sot, preference.Items(), input.Key)
 	if err != nil {
-		return nil, fmt.Errorf("generate display a: %w", err)
+		return nil, fmt.Errorf("build comparison prompt: %w", err)
 	}
 
-	displayB, err := u.generateDisplay(ctx, *sot, withOverride(preference.Items(), input.Comparison.Key, input.Comparison.ValueB))
+	messages := ai.BuildMessages(prompt, "この情報を比較用に2パターン生成してください。")
+	content, err := u.aiClient.ChatCompletionComparison(ctx, u.aiModel, messages)
 	if err != nil {
-		return nil, fmt.Errorf("generate display b: %w", err)
+		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
-	return &PrepareComparisonOutput{
-		DisplayA:   *displayA,
-		DisplayB:   *displayB,
-		Comparison: input.Comparison,
+	return &GenerateComparisonOutput{
+		Key: input.Key,
+		PatternA: ComparisonPattern{
+			Value:   content.PatternA.Value,
+			Display: DisplayContent{Title: content.PatternA.Title, Body: content.PatternA.Body},
+		},
+		PatternB: ComparisonPattern{
+			Value:   content.PatternB.Value,
+			Display: DisplayContent{Title: content.PatternB.Title, Body: content.PatternB.Body},
+		},
 	}, nil
 }
 
-// SelectComparisonInput はSelectComparisonへの入力。
-type SelectComparisonInput struct {
+// ApplyPreferenceInput はApplyPreferenceへの入力。
+type ApplyPreferenceInput struct {
 	InformationID uuid.UUID
 	RecipientID   uuid.UUID
-	Comparison    PreferenceComparison
-	Selected      string // "a" または "b"
+	Key           string
+	Value         string
 }
 
-// SelectComparison は受信者がA/Bのどちらを選んだかをもとに、
-// 比較対象となっていたPreferenceのキーを、選ばれた値で更新する。
-func (u *DisplayUsecase) SelectComparison(ctx context.Context, input SelectComparisonInput) error {
+// ApplyPreference は、GenerateComparisonで確認した候補の値を実際のPreferenceとして
+// 永続化する。AI呼び出しは行わない(表示内容はKey/Valueから一意に決まるものではなく
+// 次回のGenerateDisplayで再生成されるため、ここでは値の保存のみを行う)。
+func (u *DisplayUsecase) ApplyPreference(ctx context.Context, input ApplyPreferenceInput) error {
 	if _, err := u.loadSourceOfTruth(ctx, input.InformationID, input.RecipientID); err != nil {
 		return err
-	}
-
-	var value string
-	switch input.Selected {
-	case "a":
-		value = input.Comparison.ValueA
-	case "b":
-		value = input.Comparison.ValueB
-	default:
-		return fmt.Errorf(`selected must be "a" or "b", got %q`, input.Selected)
 	}
 
 	preference, err := u.loadOrCreatePreference(ctx, input.RecipientID)
@@ -171,7 +177,7 @@ func (u *DisplayUsecase) SelectComparison(ctx context.Context, input SelectCompa
 		return fmt.Errorf("load preference: %w", err)
 	}
 
-	if err := preference.Set(input.Comparison.Key, value); err != nil {
+	if err := preference.Set(input.Key, input.Value); err != nil {
 		return fmt.Errorf("set preference: %w", err)
 	}
 
@@ -192,19 +198,16 @@ type ChatInput struct {
 
 // ChatOutput はChatの出力。
 type ChatOutput struct {
-	Messages             []Message      `json:"messages"`
-	Display              DisplayContent `json:"display"`
-	NeedsConfirmation    bool           `json:"needs_confirmation"`
-	ConfirmationQuestion *string        `json:"confirmation_question,omitempty"`
-	PreferenceUpdated    bool           `json:"preference_updated"`
+	Messages []Message `json:"messages"`
+	Answer   string    `json:"answer"`
 }
 
-// Chat は受信者からの表示調整の要望を1ターン処理する。
+// Chat は、受信者からの資料の情報についての質問に1ターン回答する。
 //
-// AIが「今後も適用するPreferenceだ」と判断した場合のみ、このUseCase層で
-// Preferenceを更新する。一時的な指示か継続的なPreferenceかをAIが判断できない
-// 場合は確認の質問を返し、Preferenceは更新しない(対話の続きは呼び出し元が
-// 次回のHTTPリクエストで行う。AI内部でループしない)。
+// これは表示の見せ方を調整する機能ではなく、確定済みの情報(Source of Truth)に
+// ついてのQ&Aである。そのためPreferenceの読み取り(回答の言葉遣いを合わせる
+// 参考情報として)は行うが、Chatを通じてPreferenceが更新されることはない。
+// Preferenceの更新はA/B比較の選択結果(SelectComparison)からのみ行う。
 func (u *DisplayUsecase) Chat(ctx context.Context, input ChatInput) (*ChatOutput, error) {
 	sot, err := u.loadSourceOfTruth(ctx, input.InformationID, input.RecipientID)
 	if err != nil {
@@ -221,34 +224,20 @@ func (u *DisplayUsecase) Chat(ctx context.Context, input ChatInput) (*ChatOutput
 		return nil, err
 	}
 
-	resp, err := u.aiClient.ChatCompletionPreferenceChat(ctx, u.aiModel, messages)
+	resp, err := u.aiClient.ChatCompletionInformationChat(ctx, u.aiModel, messages)
 	if err != nil {
 		return nil, fmt.Errorf("chat completion: %w", err)
 	}
 
 	raw, err := json.Marshal(resp)
 	if err != nil {
-		return nil, fmt.Errorf("marshal preference chat response: %w", err)
+		return nil, fmt.Errorf("marshal information chat response: %w", err)
 	}
 	messages = append(messages, ai.Message{Role: ai.RoleAssistant, Content: string(raw)})
 
-	preferenceUpdated := false
-	if resp.IsPersistent != nil && *resp.IsPersistent && resp.PreferenceKey != nil && resp.PreferenceValue != nil {
-		if err := preference.Set(*resp.PreferenceKey, *resp.PreferenceValue); err != nil {
-			return nil, fmt.Errorf("set preference: %w", err)
-		}
-		if err := u.preferenceRepo.Save(ctx, preference); err != nil {
-			return nil, fmt.Errorf("save preference: %w", err)
-		}
-		preferenceUpdated = true
-	}
-
 	return &ChatOutput{
-		Messages:             fromAIMessages(messages),
-		Display:              DisplayContent{Title: resp.Display.Title, Body: resp.Display.Body},
-		NeedsConfirmation:    resp.IsPersistent == nil,
-		ConfirmationQuestion: resp.ConfirmationQuestion,
-		PreferenceUpdated:    preferenceUpdated,
+		Messages: fromAIMessages(messages),
+		Answer:   resp.Answer,
 	}, nil
 }
 
@@ -257,12 +246,9 @@ func (u *DisplayUsecase) nextChatMessages(history []ai.Message, userInput string
 		return append(history, ai.Message{Role: ai.RoleUser, Content: userInput}), nil
 	}
 
-	prompt, err := ai.BuildPreferenceChatSystemPrompt(sot, preference)
+	prompt, err := ai.BuildInformationChatSystemPrompt(sot, preference)
 	if err != nil {
-		return nil, fmt.Errorf("build preference chat prompt: %w", err)
-	}
-	if knownKeysPrompt := ai.BuildKnownPreferenceKeysPrompt(domain.PredefinedPreferenceKeys); knownKeysPrompt != "" {
-		prompt += "\n\n" + knownKeysPrompt
+		return nil, fmt.Errorf("build information chat prompt: %w", err)
 	}
 
 	return ai.BuildMessages(prompt, userInput), nil

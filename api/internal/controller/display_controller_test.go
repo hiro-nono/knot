@@ -48,16 +48,21 @@ func (noopDisplayPreferenceRepository) Save(ctx context.Context, preference *dom
 }
 
 type fakeDisplayChatClient struct {
-	displayResponse *ai.DisplayContent
-	chatResponse    *ai.PreferenceChatResponse
+	displayResponse    *ai.DisplayContent
+	chatResponse       *ai.InformationChatResponse
+	comparisonResponse *ai.ComparisonContent
 }
 
 func (f *fakeDisplayChatClient) ChatCompletionDisplay(ctx context.Context, model string, messages []ai.Message) (*ai.DisplayContent, error) {
 	return f.displayResponse, nil
 }
 
-func (f *fakeDisplayChatClient) ChatCompletionPreferenceChat(ctx context.Context, model string, messages []ai.Message) (*ai.PreferenceChatResponse, error) {
+func (f *fakeDisplayChatClient) ChatCompletionInformationChat(ctx context.Context, model string, messages []ai.Message) (*ai.InformationChatResponse, error) {
 	return f.chatResponse, nil
+}
+
+func (f *fakeDisplayChatClient) ChatCompletionComparison(ctx context.Context, model string, messages []ai.Message) (*ai.ComparisonContent, error) {
+	return f.comparisonResponse, nil
 }
 
 func newTestDisplayRouter(chat *fakeDisplayChatClient, information *domain.Information) (*gin.Engine, *usecase.AccountUsecase) {
@@ -80,8 +85,8 @@ func newTestDisplayRouter(chat *fakeDisplayChatClient, information *domain.Infor
 	c := NewDisplayController(uc, accountUsecase)
 	informations := r.Group("/informations", authMiddleware)
 	informations.POST("/:id/display", c.GenerateDisplay)
-	informations.POST("/:id/display/comparisons", c.PrepareComparison)
-	informations.POST("/:id/display/comparisons/selection", c.SelectComparison)
+	informations.POST("/:id/display/comparisons", c.GenerateComparison)
+	informations.POST("/:id/display/comparisons/apply", c.ApplyPreference)
 	informations.POST("/:id/display/chat", c.Chat)
 	return r, accountUsecase
 }
@@ -121,12 +126,15 @@ func TestDisplayController_GenerateDisplay_Success(t *testing.T) {
 		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
 	}
 
-	var out usecase.DisplayContent
+	var out usecase.GenerateDisplayOutput
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
 	if out.Title != "お知らせ" || out.Body != "本文" {
 		t.Errorf("out = %+v, unexpected", out)
+	}
+	if out.HasPreference {
+		t.Error("HasPreference = true, want false (recipient has no preference yet)")
 	}
 }
 
@@ -304,7 +312,7 @@ func TestDisplayController_ListSources_AnonymousForbiddenForRestricted(t *testin
 	}
 }
 
-func TestDisplayController_SelectComparison_InvalidSelected(t *testing.T) {
+func TestDisplayController_ApplyPreference_MissingValue(t *testing.T) {
 	information, err := domain.NewInformation(uuid.New(), uuid.New(), "旅行のお知らせ", domain.InformationAccessTypePublic, domain.InformationResponsePolicyAnonymous)
 	if err != nil {
 		t.Fatalf("NewInformation() error = %v", err)
@@ -313,11 +321,8 @@ func TestDisplayController_SelectComparison_InvalidSelected(t *testing.T) {
 	r, accountUsecase := newTestDisplayRouter(&fakeDisplayChatClient{}, information)
 	registerTestIdentity(t, accountUsecase, "recipient-1")
 
-	body, _ := json.Marshal(map[string]any{
-		"comparison": usecase.PreferenceComparison{Key: "reading_level", ValueA: "easy", ValueB: "detailed"},
-		"selected":   "c",
-	})
-	req := httptest.NewRequest(http.MethodPost, "/informations/"+information.ID().String()+"/display/comparisons/selection", bytes.NewReader(body))
+	body, _ := json.Marshal(map[string]any{"key": "reading_level"})
+	req := httptest.NewRequest(http.MethodPost, "/informations/"+information.ID().String()+"/display/comparisons/apply", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+signTestToken(t, "recipient-1"))
 	w := httptest.NewRecorder()
@@ -329,23 +334,55 @@ func TestDisplayController_SelectComparison_InvalidSelected(t *testing.T) {
 	}
 }
 
+func TestDisplayController_GenerateComparison_Success(t *testing.T) {
+	information, err := domain.NewInformation(uuid.New(), uuid.New(), "旅行のお知らせ", domain.InformationAccessTypePublic, domain.InformationResponsePolicyAnonymous)
+	if err != nil {
+		t.Fatalf("NewInformation() error = %v", err)
+	}
+
+	chat := &fakeDisplayChatClient{
+		comparisonResponse: &ai.ComparisonContent{
+			PatternA: ai.ComparisonPattern{Value: "easy", Title: "お知らせ", Body: "かんたんな本文"},
+			PatternB: ai.ComparisonPattern{Value: "detailed", Title: "お知らせ", Body: "詳しい本文"},
+		},
+	}
+	r, accountUsecase := newTestDisplayRouter(chat, information)
+	registerTestIdentity(t, accountUsecase, "recipient-1")
+
+	body, _ := json.Marshal(map[string]any{"key": "reading_level"})
+	req := httptest.NewRequest(http.MethodPost, "/informations/"+information.ID().String()+"/display/comparisons", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+signTestToken(t, "recipient-1"))
+	w := httptest.NewRecorder()
+
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", w.Code, http.StatusOK, w.Body.String())
+	}
+
+	var out usecase.GenerateComparisonOutput
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if out.PatternA.Value != "easy" || out.PatternB.Value != "detailed" {
+		t.Errorf("out = %+v, unexpected", out)
+	}
+}
+
 func TestDisplayController_Chat_Success(t *testing.T) {
 	information, err := domain.NewInformation(uuid.New(), uuid.New(), "旅行のお知らせ", domain.InformationAccessTypePublic, domain.InformationResponsePolicyAnonymous)
 	if err != nil {
 		t.Fatalf("NewInformation() error = %v", err)
 	}
 
-	question := "今後も常にこの設定にしますか？"
 	chat := &fakeDisplayChatClient{
-		chatResponse: &ai.PreferenceChatResponse{
-			Display:              ai.DisplayContent{Title: "お知らせ", Body: "本文"},
-			ConfirmationQuestion: &question,
-		},
+		chatResponse: &ai.InformationChatResponse{Answer: "集合時間は10時です。"},
 	}
 	r, accountUsecase := newTestDisplayRouter(chat, information)
 	registerTestIdentity(t, accountUsecase, "recipient-1")
 
-	body, _ := json.Marshal(map[string]any{"user_input": "もっと簡単にして"})
+	body, _ := json.Marshal(map[string]any{"user_input": "集合時間は何時ですか？"})
 	req := httptest.NewRequest(http.MethodPost, "/informations/"+information.ID().String()+"/display/chat", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+signTestToken(t, "recipient-1"))
@@ -361,10 +398,7 @@ func TestDisplayController_Chat_Success(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
 		t.Fatalf("unmarshal response: %v", err)
 	}
-	if !out.NeedsConfirmation {
-		t.Error("NeedsConfirmation = false, want true")
-	}
-	if out.ConfirmationQuestion == nil || *out.ConfirmationQuestion != question {
-		t.Errorf("ConfirmationQuestion = %v, want %q", out.ConfirmationQuestion, question)
+	if out.Answer != "集合時間は10時です。" {
+		t.Errorf("Answer = %q, want %q", out.Answer, "集合時間は10時です。")
 	}
 }
