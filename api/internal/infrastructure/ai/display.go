@@ -29,6 +29,22 @@ type DisplayContent struct {
 
 const displaySchemaName = "display_content"
 
+// htmlBodyFormatInstructions は、DisplayContent.Body(表示本文)をAIに
+// 生成させる際、Markdownではなく安全なHTML断片 + Tailwind CSSで
+// 出力させるための指示文。
+//
+// 受信者側のレンダラーはこの出力をサニタイズしたうえで
+// dangerouslySetInnerHTMLとして描画する想定のため、scriptやイベント
+// ハンドラ属性などを含めないことを明示する。
+const htmlBodyFormatInstructions = `bodyは、Markdownではなく、TailwindCSSのユーティリティクラスで
+スタイリングされたHTML断片として出力してください。
+- <div><p><span><h1〜h6><ul><ol><li><strong><em><a><table><thead><tbody><tr><th><td><br><hr>
+  など、意味のある範囲で自由にHTML要素・レイアウト(flex/gridなど)を使って構いません。
+- 見た目はすべてTailwindCSSのクラス名で指定してください(class="...")。インラインstyle属性、
+  <style>タグ、<script>タグ、on〜(onclickなど)のイベントハンドラ属性は絶対に含めないでください。
+- <html><head><body>などページ全体を表すタグは不要です。bodyの中身となる断片のみを出力してください。
+- 外部リソース(画像・フォント・iframe等)の読み込みは行わないでください。`
+
 func displayContentSchema() map[string]any {
 	return map[string]any{
 		"type":                 "object",
@@ -36,7 +52,10 @@ func displayContentSchema() map[string]any {
 		"required":             []string{"title", "body"},
 		"properties": map[string]any{
 			"title": map[string]any{"type": "string"},
-			"body":  map[string]any{"type": "string"},
+			"body": map[string]any{
+				"type":        "string",
+				"description": "TailwindCSSのクラスを使った安全なHTML断片(Markdown不可)。script/style/on*属性は含めない。",
+			},
 		},
 	}
 }
@@ -91,7 +110,8 @@ func (c *Client) ChatCompletionDisplay(ctx context.Context, model string, messag
 // 表示生成用のシステムプロンプトを組み立てる。
 //
 // Source of Truthの内容(事実)は変更・省略させず、表現の平易さ・情報量・言語などの
-// 「見せ方」だけをPreferenceに合わせて最適化させる。
+// 「見せ方」だけをPreferenceに合わせて最適化させる。bodyはMarkdownではなく
+// TailwindCSSクラスで装飾したHTML断片として出力させる(htmlBodyFormatInstructions)。
 func BuildDisplaySystemPrompt(sot SourceOfTruth, preference map[string]string) (string, error) {
 	sotJSON, err := json.Marshal(sot)
 	if err != nil {
@@ -111,9 +131,11 @@ Preferenceに無い項目については、標準的でわかりやすい見せ�
 
 titleとbody(表示本文)をJSONで出力してください。
 
+%s
+
 # Source of Truth
 %s
 
 # 受信者のPreference
-%s`, string(sotJSON), string(preferenceJSON)), nil
+%s`, htmlBodyFormatInstructions, string(sotJSON), string(preferenceJSON)), nil
 }
